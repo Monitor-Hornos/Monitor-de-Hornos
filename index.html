@@ -1,0 +1,357 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Monitor Global de Hornos - MQTT</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Librería MQTT de Eclipse Paho para WebSockets -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; margin: 0; padding: 8px; display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+    h1 { color: #f59e0b; font-size: 1rem; margin: 4px 0; }
+    .cards { display: flex; justify-content: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+    .card { background: #1e293b; padding: 5px 8px; border-radius: 6px; width: 80px; box-shadow: 0 2px 4px rgba(0,0,0,0.4); border-top: 3px solid #555; }
+    .card.h1 { border-color: #ff5722; }
+    .card.h2 { border-color: #4caf50; }
+    .card.h3 { border-color: #2196f3; }
+    .card.teo { border-color: #eab308; }
+    .title { font-size: 0.65rem; color: #94a3b8; font-weight: bold; }
+    .val { font-size: 0.95rem; font-weight: bold; margin-top: 2px; color: #fff; }
+    
+    .controls-panel { background: #1e293b; padding: 6px; border-radius: 6px; display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.75rem; flex-wrap: wrap; }
+    .controls-panel label { color: #94a3b8; cursor: pointer; }
+    .controls-panel input { background: #334155; color: #fff; border: 1px solid #475569; padding: 2px 4px; border-radius: 4px; font-size: 0.75rem; }
+    button { background: #334155; color: #fff; border: 1px solid #475569; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+    button:hover { background: #475569; }
+
+    .canvas-container { background: #1e293b; border-radius: 6px; flex-grow: 1; width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.4); position: relative; overflow: hidden; }
+    canvas { width: 100%; height: 100%; display: block; }
+    
+    #status-mqtt { font-size: 0.7rem; color: #38bdf8; margin-bottom: 4px; }
+    #tooltip { position: absolute; background: rgba(15, 23, 42, 0.95); border: 1px solid #475569; padding: 5px 8px; border-radius: 4px; pointer-events: none; display: none; font-size: 0.7rem; text-align: left; color: #fff; box-shadow: 0 4px 6px rgba(0,0,0,0.5); z-index: 10; }
+  </style>
+</head>
+<body>
+  <h1>MONITOR GLOBAL DE HORNOS (MQTT)</h1>
+  <div id="status-mqtt">Conectando al servidor MQTT en la nube...</div>
+  
+  <div class="cards">
+    <div class="card h1"><div class="title">Horno 1</div><div id="t1" class="val">-- °C</div></div>
+    <div class="card h2"><div class="title">Horno 2</div><div id="t2" class="val">-- °C</div></div>
+    <div class="card h3"><div class="title">Horno 3</div><div id="t3" class="val">-- °C</div></div>
+    <div class="card teo"><div class="title">Teórica</div><div id="tTeo" class="val">-- °C</div></div>
+  </div>
+
+  <div class="controls-panel">
+    <div><input type="checkbox" id="chkH1" checked onchange="dibujarGrafico()"> <label for="chkH1" style="color:#ff5722">H1</label></div>
+    <div><input type="checkbox" id="chkH2" checked onchange="dibujarGrafico()"> <label for="chkH2" style="color:#4caf50">H2</label></div>
+    <div><input type="checkbox" id="chkH3" checked onchange="dibujarGrafico()"> <label for="chkH3" style="color:#2196f3">H3</label></div>
+    <div><input type="checkbox" id="chkTeorica" checked onchange="dibujarGrafico()"> <label for="chkTeorica" style="color:#eab308">Teórica</label></div>
+    <div><input type="checkbox" id="chkEscalaTotal" checked onchange="dibujarGrafico()"> <label for="chkEscalaTotal" style="color:#38bdf8">Estática</label></div>
+    
+    <div>T.Ini: <input type="number" id="tIni" value="25" style="width:40px">°C</div>
+    <div>T.Obj: <input type="number" id="tObj" value="200" style="width:45px">°C</div>
+    <div>Rampa: <input type="number" id="rampVel" value="120" style="width:50px">°C/h</div>
+    <div>Mant: <input type="number" id="holdMin" value="30" style="width:60px"> min</div>
+    <div>Enf: <input type="number" id="coolVel" value="100" style="width:50px">°C/h</div>
+    <div>Grabación: <input type="number" id="duracionGrabacionMin" value="120" style="width:65px"> min</div>
+    
+    <button onclick="iniciarPerfilTeorico()" style="background:#047857; font-weight:bold;">▶ Iniciar Perfil</button>
+    <button onclick="exportarCSV()">📥 CSV</button>
+    <button onclick="limpiarDatos()" style="background: #991b1b;">🗑️ Borrar</button>
+  </div>
+
+  <div class="canvas-container" id="canvasContainer">
+    <div id="tooltip"></div>
+    <canvas id="tempCanvas"></canvas>
+  </div>
+
+  <script>
+    // Configuración MQTT WebSockets (Broker HiveMQ puerto WS)
+    const mqttClient = new Paho.Client("broker.hivemq.com", Number(8000), "web_client_" + Math.random().toString(16).substr(2, 8));
+
+    mqttClient.onConnectionLost = (responseObject) => {
+      document.getElementById("status-mqtt").innerText = "⚠️ Desconectado del servidor MQTT. Reconectando...";
+      setTimeout(conectarMQTT, 4000);
+    };
+
+    mqttClient.onMessageArrived = (message) => {
+      try {
+        let d = JSON.parse(message.payloadString);
+        document.getElementById('t1').innerText = (d.t1 !== undefined ? d.t1.toFixed(1) : '--') + ' °C';
+        document.getElementById('t2').innerText = (d.t2 !== undefined ? d.t2.toFixed(1) : '--') + ' °C';
+        document.getElementById('t3').innerText = (d.t3 !== undefined ? d.t3.toFixed(1) : '--') + ' °C';
+
+        let now = Date.now();
+        let timeStr = new Date(now).toLocaleTimeString();
+        let valTeorico = calcularTeoricaParaTiempo(now);
+        document.getElementById('tTeo').innerText = valTeorico.toFixed(1) + ' °C';
+
+        historial.timestamps.push(now);
+        historial.tiempo.push(timeStr);
+        historial.h1.push(d.t1 || 0);
+        historial.h2.push(d.t2 || 0);
+        historial.h3.push(d.t3 || 0);
+        historial.teorica.push(valTeorico);
+
+        localStorage.setItem('horno_data_mqtt', JSON.stringify(historial));
+        dibujarGrafico();
+      } catch (err) { console.error("Error al procesar JSON MQTT:", err); }
+    };
+
+    function conectarMQTT() {
+      mqttClient.connect({
+        onSuccess: () => {
+          document.getElementById("status-mqtt").innerText = "🟢 Conectado globalmente a la nube (MQTT)";
+          mqttClient.subscribe("taller/hornos/telemetria_v1");
+        },
+        onFailure: (err) => {
+          document.getElementById("status-mqtt").innerText = "❌ Error de conexión MQTT. Reintentando...";
+          setTimeout(conectarMQTT, 5000);
+        },
+        useSSL: false
+      });
+    }
+    conectarMQTT();
+
+    // Lógica del Gráfico y Perfiles Térmicos
+    const canvas = document.getElementById('tempCanvas');
+    const ctx = canvas.getContext('2d');
+    const tooltip = document.getElementById('tooltip');
+    
+    let historial = JSON.parse(localStorage.getItem('horno_data_mqtt') || '{"timestamps":[], "tiempo":[], "h1":[], "h2":[], "h3":[], "teorica":[]}');
+    let perfilConfig = JSON.parse(localStorage.getItem('perfil_config_mqtt') || '{"tIni":25, "tObj":200, "rampVel":120, "holdMin":30, "coolVel":100, "duracionMin":120, "startTime": null, "totalDurationMs": 7200000}');
+    
+    document.getElementById('tIni').value = perfilConfig.tIni;
+    document.getElementById('tObj').value = perfilConfig.tObj;
+    document.getElementById('rampVel').value = perfilConfig.rampVel;
+    document.getElementById('holdMin').value = perfilConfig.holdMin;
+    document.getElementById('coolVel').value = perfilConfig.coolVel || 100;
+    document.getElementById('duracionGrabacionMin').value = perfilConfig.duracionMin || 120;
+
+    let mouseX = -1;
+    let mouseY = -1;
+
+    function ajustarCanvas() {
+      canvas.width = canvas.parentElement.clientWidth;
+      canvas.height = canvas.parentElement.clientHeight;
+      dibujarGrafico();
+    }
+    window.onresize = ajustarCanvas;
+
+    function iniciarPerfilTeorico() {
+      perfilConfig.tIni = parseFloat(document.getElementById('tIni').value) || 25;
+      perfilConfig.tObj = parseFloat(document.getElementById('tObj').value) || 200;
+      perfilConfig.rampVel = parseFloat(document.getElementById('rampVel').value) || 120;
+      perfilConfig.holdMin = parseFloat(document.getElementById('holdMin').value) || 30;
+      perfilConfig.coolVel = parseFloat(document.getElementById('coolVel').value) || 100;
+
+      // Cálculo automático estricto de la duración total real del proceso para que entre exacto
+      let diffTempRamp = Math.abs(perfilConfig.tObj - perfilConfig.tIni);
+      let rampHours = diffTempRamp / (perfilConfig.rampVel || 1);
+      let holdHours = perfilConfig.holdMin / 60;
+      let coolHours = diffTempRamp / (perfilConfig.coolVel || 1);
+      
+      let totalHoursCalculated = rampHours + holdHours + coolHours;
+      let totalMinutesCalculated = Math.ceil(totalHoursCalculated * 60);
+
+      perfilConfig.duracionMin = totalMinutesCalculated;
+      document.getElementById('duracionGrabacionMin').value = perfilConfig.duracionMin;
+
+      perfilConfig.startTime = Date.now();
+      perfilConfig.totalDurationMs = perfilConfig.duracionMin * 60000;
+
+      localStorage.setItem('perfil_config_mqtt', JSON.stringify(perfilConfig));
+      alert("¡Perfil recalculado! Duración total ajustada automáticamente a " + perfilConfig.duracionMin + " min (" + totalHoursCalculated.toFixed(1) + " hs) para que la curva completa entre en pantalla.");
+      dibujarGrafico();
+    }
+
+    function calcularTeoricaParaTiempo(puntoTimestamp) {
+      if (!perfilConfig.startTime) return perfilConfig.tIni;
+      let elapsedHours = (puntoTimestamp - perfilConfig.startTime) / 3600000;
+      if (elapsedHours < 0) return perfilConfig.tIni;
+
+      let diffTempRamp = Math.abs(perfilConfig.tObj - perfilConfig.tIni);
+      let rampHours = diffTempRamp / (perfilConfig.rampVel || 1);
+      let holdHours = perfilConfig.holdMin / 60;
+      let coolHours = diffTempRamp / (perfilConfig.coolVel || 1);
+
+      if (elapsedHours <= rampHours) {
+        let sentido = perfilConfig.tObj >= perfilConfig.tIni ? 1 : -1;
+        return perfilConfig.tIni + (sentido * perfilConfig.rampVel * elapsedHours);
+      } else if (elapsedHours <= (rampHours + holdHours)) {
+        return perfilConfig.tObj;
+      } else if (elapsedHours <= (rampHours + holdHours + coolHours)) {
+        let elapsedCooling = elapsedHours - (rampHours + holdHours);
+        let tempCalculada = perfilConfig.tObj - (perfilConfig.coolVel * elapsedCooling);
+        return Math.max(tempCalculada, perfilConfig.tIni);
+      } else {
+        return perfilConfig.tIni;
+      }
+    }
+
+    function dibujarGrafico() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let w = canvas.width;
+      let h = canvas.height;
+      let padding = 45;
+      let plotW = w - padding - 20;
+      let plotH = h - padding - 25;
+
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i <= 5; i++) {
+        let y = padding + (plotH / 5) * i;
+        ctx.moveTo(padding, y);
+        ctx.lineTo(w - 20, y);
+      }
+      ctx.stroke();
+
+      let modoEscalaTotal = document.getElementById('chkEscalaTotal').checked && perfilConfig.startTime && perfilConfig.totalDurationMs > 0;
+
+      let allVals = [...historial.h1, ...historial.h2, ...historial.h3, ...historial.teorica, perfilConfig.tObj, perfilConfig.tIni];
+      let maxVal = allVals.length > 0 ? Math.max(...allVals, 200) : 250;
+      maxVal = Math.ceil(maxVal / 50) * 50;
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '10px Arial';
+      ctx.textAlign = 'right';
+      for (let i = 0; i <= 5; i++) {
+        let val = maxVal - (maxVal / 5) * i;
+        let y = padding + (plotH / 5) * i;
+        ctx.fillText(val.toFixed(0) + '°C', padding - 5, y + 4);
+      }
+
+      if (document.getElementById('chkTeorica').checked && modoEscalaTotal) {
+        ctx.strokeStyle = '#eab308';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        let pasos = 150;
+        for (let i = 0; i <= pasos; i++) {
+          let tMs = perfilConfig.startTime + (perfilConfig.totalDurationMs / pasos) * i;
+          let valT = calcularTeoricaParaTiempo(tMs);
+          let x = padding + (i / pasos) * plotW;
+          let y = padding + plotH - (valT / maxVal) * plotH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (historial.timestamps.length === 0) return;
+
+      function trazarLineaHistorial(datos, color, visible) {
+        if (!visible || datos.length < 1) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+
+        for (let i = 0; i < datos.length; i++) {
+          let x = 0;
+          if (modoEscalaTotal) {
+            let elapsed = historial.timestamps[i] - perfilConfig.startTime;
+            let ratio = elapsed / perfilConfig.totalDurationMs;
+            ratio = Math.max(0, Math.min(ratio, 1));
+            x = padding + ratio * plotW;
+          } else {
+            let pasoX = plotW / Math.max(historial.timestamps.length - 1, 1);
+            x = padding + i * pasoX;
+          }
+
+          let y = padding + plotH - (datos[i] / maxVal) * plotH;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      trazarLineaHistorial(historial.h1, '#ff5722', document.getElementById('chkH1').checked);
+      trazarLineaHistorial(historial.h2, '#4caf50', document.getElementById('chkH2').checked);
+      trazarLineaHistorial(historial.h3, '#2196f3', document.getElementById('chkH3').checked);
+      
+      if (!modoEscalaTotal) {
+        trazarLineaHistorial(historial.teorica, '#eab308', document.getElementById('chkTeorica').checked);
+      }
+
+      if (mouseX >= padding && mouseX <= w - 20 && mouseY >= padding && mouseY <= padding + plotH) {
+        let index = -1;
+        if (modoEscalaTotal) {
+          let ratioMouse = (mouseX - padding) / plotW;
+          let timeMouse = perfilConfig.startTime + ratioMouse * perfilConfig.totalDurationMs;
+          let minDiff = Infinity;
+          for (let i = 0; i < historial.timestamps.length; i++) {
+            let diff = Math.abs(historial.timestamps[i] - timeMouse);
+            if (diff < minDiff) { minDiff = diff; index = i; }
+          }
+        } else {
+          let pasoX = plotW / Math.max(historial.timestamps.length - 1, 1);
+          index = Math.round((mouseX - padding) / pasoX);
+          index = Math.max(0, Math.min(index, historial.timestamps.length - 1));
+        }
+
+        if (index >= 0 && index < historial.timestamps.length) {
+          let xCoord = mouseX;
+          ctx.strokeStyle = '#94a3b8';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+          ctx.beginPath();
+          ctx.moveTo(xCoord, padding);
+          ctx.lineTo(xCoord, padding + plotH);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          tooltip.style.display = 'block';
+          tooltip.style.left = (xCoord + 15) + 'px';
+          tooltip.style.top = (mouseY - 20) + 'px';
+          tooltip.innerHTML = `<b>Hora:</b> ${historial.tiempo[index]}<br>` +
+                              `<span style="color:#ff5722">H1:</span> ${historial.h1[index]} °C<br>` +
+                              `<span style="color:#4caf50">H2:</span> ${historial.h2[index]} °C<br>` +
+                              `<span style="color:#2196f3">H3:</span> ${historial.h3[index]} °C<br>` +
+                              `<span style="color:#eab308">Teórica:</span> ${historial.teorica[index].toFixed(1)} °C`;
+        }
+      } else {
+        tooltip.style.display = 'none';
+      }
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+      let rect = canvas.getBoundingClientRect();
+      mouseX = e.clientX - rect.left;
+      mouseY = e.clientY - rect.top;
+      dibujarGrafico();
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      mouseX = -1;
+      mouseY = -1;
+      tooltip.style.display = 'none';
+      dibujarGrafico();
+    });
+
+    function exportarCSV() {
+      let csv = 'Hora,Horno 1,Horno 2,Horno 3,Teorica\n';
+      for (let i = 0; i < historial.tiempo.length; i++) {
+        csv += `${historial.tiempo[i]},${historial.h1[i]},${historial.h2[i]},${historial.h3[i]},${historial.teorica[i].toFixed(1)}\n`;
+      }
+      let blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      let link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'registro_hornos_global.csv';
+      link.click();
+    }
+
+    function limpiarDatos() {
+      if(confirm("¿Borrar todo el historial guardado?")) {
+        historial = {timestamps:[], tiempo:[], h1:[], h2:[], h3:[], teorica:[]};
+        localStorage.removeItem('horno_data_mqtt');
+        dibujarGrafico();
+      }
+    }
+
+    setTimeout(ajustarCanvas, 100);
+  </script>
+</body>
+</html>
