@@ -67,8 +67,8 @@
   </div>
 
   <script>
-    // Configuración MQTT WebSockets (Broker HiveMQ puerto WS)
-    const mqttClient = new Paho.Client("broker.hivemq.com", Number(8000), "web_client_" + Math.random().toString(16).substr(2, 8));
+    // Configuración MQTT WebSockets apuntando a Mosquitto (Puerto WS SSL 8081)
+    const mqttClient = new Paho.Client("test.mosquitto.org", Number(8081), "web_client_" + Math.random().toString(16).substr(2, 8));
 
     mqttClient.onConnectionLost = (responseObject) => {
       document.getElementById("status-mqtt").innerText = "⚠️ Desconectado del servidor MQTT. Reconectando...";
@@ -94,7 +94,7 @@
         historial.h3.push(d.t3 || 0);
         historial.teorica.push(valTeorico);
 
-        localStorage.setItem('horno_data_mqtt', JSON.stringify(historial));
+        localStorage.setItem('horno_data_mqtt_v2', JSON.stringify(historial));
         dibujarGrafico();
       } catch (err) { console.error("Error al procesar JSON MQTT:", err); }
     };
@@ -102,14 +102,14 @@
     function conectarMQTT() {
       mqttClient.connect({
         onSuccess: () => {
-          document.getElementById("status-mqtt").innerText = "🟢 Conectado globalmente a la nube (MQTT)";
+          document.getElementById("status-mqtt").innerText = "🟢 Conectado globalmente a la nube (Mosquitto MQTT)";
           mqttClient.subscribe("taller/hornos/telemetria_v1");
         },
         onFailure: (err) => {
           document.getElementById("status-mqtt").innerText = "❌ Error de conexión MQTT. Reintentando...";
-          setTimeout(conectarMQTT, 5000);
+          setTimeout(conectarMQTT, 4000);
         },
-        useSSL: false
+        useSSL: true
       });
     }
     conectarMQTT();
@@ -119,8 +119,8 @@
     const ctx = canvas.getContext('2d');
     const tooltip = document.getElementById('tooltip');
     
-    let historial = JSON.parse(localStorage.getItem('horno_data_mqtt') || '{"timestamps":[], "tiempo":[], "h1":[], "h2":[], "h3":[], "teorica":[]}');
-    let perfilConfig = JSON.parse(localStorage.getItem('perfil_config_mqtt') || '{"tIni":25, "tObj":200, "rampVel":120, "holdMin":30, "coolVel":100, "duracionMin":120, "startTime": null, "totalDurationMs": 7200000}');
+    let historial = JSON.parse(localStorage.getItem('horno_data_mqtt_v2') || '{"timestamps":[], "tiempo":[], "h1":[], "h2":[], "h3":[], "teorica":[]}');
+    let perfilConfig = JSON.parse(localStorage.getItem('perfil_config_mqtt_v2') || '{"tIni":25, "tObj":200, "rampVel":120, "holdMin":30, "coolVel":100, "duracionMin":120, "startTime": null, "totalDurationMs": 7200000}');
     
     document.getElementById('tIni').value = perfilConfig.tIni;
     document.getElementById('tObj').value = perfilConfig.tObj;
@@ -161,7 +161,7 @@
       perfilConfig.startTime = Date.now();
       perfilConfig.totalDurationMs = perfilConfig.duracionMin * 60000;
 
-      localStorage.setItem('perfil_config_mqtt', JSON.stringify(perfilConfig));
+      localStorage.setItem('perfil_config_mqtt_v2', JSON.stringify(perfilConfig));
       alert("¡Perfil recalculado! Duración total ajustada automáticamente a " + perfilConfig.duracionMin + " min (" + totalHoursCalculated.toFixed(1) + " hs) para que la curva completa entre en pantalla.");
       dibujarGrafico();
     }
@@ -346,7 +346,7 @@
     function limpiarDatos() {
       if(confirm("¿Borrar todo el historial guardado?")) {
         historial = {timestamps:[], tiempo:[], h1:[], h2:[], h3:[], teorica:[]};
-        localStorage.removeItem('horno_data_mqtt');
+        localStorage.removeItem('horno_data_mqtt_v2');
         dibujarGrafico();
       }
     }
